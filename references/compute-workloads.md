@@ -115,6 +115,13 @@ To submit a sweep of `job`, `hpc`, `notebook`, `ray`, or `serving` workloads tha
 - Always run `<workload> batch <file> --dry-run` first to validate the expanded items and dataset mounts before creating anything.
 - Within a single `job`, `hpc`, or `notebook` batch invocation, live quota priority menus, project catalogs, image catalogs, and successful `(workspace, dataset, version)` validations are fetched once per Workspace and reused across items in that run.
 
+### Pacing, Quota Headroom & Shell-Loop Pitfalls
+
+- Prefer `<workload> batch` over hand-rolled shell loops: catalogs are fetched once per run and items submit back-to-back. A custom loop that runs listing queries and sleeps between submissions can throttle to ~one job per minute while large pools sit idle — submission throughput is part of utilization.
+- Validate one submission end-to-end before scaling out (one item accepted and scheduling, then the rest). In bulk loops a single unrecognized flag fails every invocation silently — for example, a `--yes`-style confirmation flag copied from another CLI is rejected by `job stop` (which takes no confirmation flag at all; `job delete` prompts, feed `y` when non-interactive).
+- Size waves from live project quota headroom, not a fixed guess. Project running quota is a shared pool across the parent project, all child projects, and every member; a request that fits the card pool can still fail the preemption check with `Parent&sub project total quota insufficient`, which reports `used(parent + all children)` and `quota(parent total)` — derive the real headroom from those numbers and resize instead of retrying. Check `resources usage --project <name>` before large waves.
+- Quota-filler / keepalive jobs submitted "to hold quota before others take it" block your own project's legitimate jobs: other members and your own concurrent sessions share the same pool. Keep filler at `--priority 1` (preemptible), logged with an explicit release condition.
+
 ## 8. Observation & Debugging Loop
 
 | Command | Primary Question Answered |
@@ -133,6 +140,7 @@ To submit a sweep of `job`, `hpc`, `notebook`, `ray`, or `serving` workloads tha
 - **Batch status & events:** `job status`, `hpc status`, and `job events` accept multiple workload names in a single command (fetched in chunks of 20). Unresolved names (typos, deleted jobs, or ambiguous names) are listed under `Unresolved:` with a non-zero exit code without aborting the resolved items.
 - **Cross-workspace search:** When you do not know which Workspace a Job is in, run `inspire job list --workspace all` (queries up to 8 Workspaces concurrently in round-robin pages).
 - **Waiting for completion:** Only wait on workloads in non-terminal states (`PENDING`, `QUEUING`, `RUNNING`). Stopped Jobs (`CANCELLED`) and HPC jobs cannot be restarted (`start` only exists on Notebook, Ray, and Serving). `job wait` and `job logs --follow` exit automatically when the Job reaches a terminal state; `events --follow` and `job list --watch` stream indefinitely until interrupted — do not use them as completion barriers.
+- **Re-verify before acting on anomalies:** custom JSON-parsing helpers are a known false-negative source (empty output or `total=1` while workloads run normally). Any "all jobs vanished / all failed" conclusion must be re-confirmed with the default human-readable `job list` table before acting on it.
 
 ## 9. TensorBoard (`inspire tensorboard`)
 
